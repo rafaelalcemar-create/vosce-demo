@@ -1,3 +1,2 @@
 streamlit
-openai==0.28
-pandas
+openai>=1.0.0
