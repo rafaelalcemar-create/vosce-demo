@@ -1,20 +1,24 @@
 # streamlit_app.py
 import os
 import streamlit as st
-from openai import OpenAI
+import google.generativeai as genai  # <<< MUDANÇA: Importa a biblioteca do Google
 from datetime import datetime
 
 # ---- Configurações da página ----
 st.set_page_config(page_title="VOSCE - Simulação Clínica Virtual", page_icon="🩺", layout="centered")
 
 # ---- Configuração da API ----
-OPENAI_KEY = None
+# <<< MUDANÇA: Configura a API do Google (Gemini)
+GOOGLE_API_KEY = None
 try:
-    OPENAI_KEY = st.secrets["OPENAI_API_KEY"]
+    # Carrega a chave do Streamlit Secrets
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=GOOGLE_API_KEY)
 except Exception:
-    OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-
-client = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
+    # Tenta carregar do ambiente local (se rodando no seu PC)
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    if GOOGLE_API_KEY:
+        genai.configure(api_key=GOOGLE_API_KEY)
 
 # ---- Estilo visual ----
 st.markdown("""
@@ -38,10 +42,13 @@ if "meta" not in st.session_state:
     st.session_state.meta = {"aluno": "", "caso": ""}
 
 # ---- Funções ----
-def get_ai_response(messages):
-    """Chama o modelo da OpenAI ou retorna resposta simulada se sem chave."""
-    if not client:
-        pergunta = messages[-1]["content"].lower()
+
+# <<< MUDANÇA: Função de API reescrita para o Gemini
+def get_ai_response(messages_history):
+    """Chama o modelo do Gemini ou retorna resposta simulada se sem chave."""
+    if not GOOGLE_API_KEY:
+        st.warning("Chave de API do Google não configurada. Usando respostas de fallback.", icon="⚠️")
+        pergunta = messages_history[-1]["content"].lower()
         if "dor" in pergunta:
             return "Sinto uma queimação leve quando urino."
         elif "tempo" in pergunta:
@@ -52,16 +59,34 @@ def get_ai_response(messages):
             return "Sim, tive febre leve ontem à noite."
         else:
             return "Não sei dizer, doutor."
+    
     try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=300,
-            temperature=0.2,
+        # Extrai o prompt do sistema (a primeira mensagem)
+        system_prompt_text = messages_history[0]["content"]
+        
+        # Converte o histórico de chat para o formato do Gemini
+        # Pula a primeira mensagem (sistema) e converte o resto
+        gemini_history = []
+        for msg in messages_history[1:]:
+            # Converte 'assistant' (OpenAI) para 'model' (Gemini)
+            role = "model" if msg["role"] == "assistant" else msg["role"]
+            gemini_history.append({"role": role, "parts": [msg["content"]]})
+
+        # Inicializa o modelo com o prompt do sistema
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash-latest", # 'Flash' é mais rápido e barato
+            system_instruction=system_prompt_text
         )
-        return response.choices[0].message.content.strip()
+
+        # A API do Gemini lida com o histórico diretamente na chamada
+        # A `gemini_history` já contém a última pergunta do usuário
+        response = model.generate_content(gemini_history)
+        
+        return response.text.strip()
+        
     except Exception as e:
-        return f"[ERRO NA API: {e}]"
+        st.error(f"Erro ao contatar a API Google Gemini: {e}", icon="🚨")
+        return "[ERRO NA API]"
 
 def system_prompt(case_short):
     return (
@@ -102,7 +127,7 @@ if st.session_state.page == "inicio":
     if st.button("🚀 Iniciar Simulação"):
         st.session_state.chat = []
         st.session_state.page = "simulacao"
-        st.experimental_rerun()
+        st.rerun() # Já está corrigido da nossa conversa anterior
 
 # ---- Simulação ----
 elif st.session_state.page == "simulacao":
@@ -114,8 +139,9 @@ elif st.session_state.page == "simulacao":
     for msg in st.session_state.chat:
         if msg["role"] == "user":
             st.markdown(f"<div class='chat-bubble-user'><b>Você:</b><br>{msg['content']}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='chat-bubble-patient'><b>Paciente:</b><br>{msg['content']}</div>", unsafe_allow_html=True)
+        elif msg["role"] == "assistant":
+            if not msg['content'].startswith("[ERRO NA API]"):
+                st.markdown(f"<div class='chat-bubble-patient'><b>Paciente:</b><br>{msg['content']}</div>", unsafe_allow_html=True)
 
     pergunta = st.text_input("Digite sua pergunta para o paciente:", key="input_pergunta")
 
@@ -124,24 +150,33 @@ elif st.session_state.page == "simulacao":
         if st.button("Enviar pergunta"):
             if pergunta.strip():
                 st.session_state.chat.append({"role": "user", "content": pergunta})
+                
+                # <<< MUDANÇA: Lógica de chamada de API simplificada
+                # Prepara a lista de mensagens para o Gemini
                 prompt = system_prompt(st.session_state.meta["caso"])
-                msgs = [{"role": "system", "content": prompt}]
-                for m in st.session_state.chat[-10:]:
-                    msgs.append({"role": m["role"], "content": m["content"]})
-                resposta = get_ai_response(msgs)
+                msgs_para_api = [{"role": "system", "content": prompt}]
+                
+                # Adiciona o histórico do chat
+                for m in st.session_state.chat[-10:]: # Pega as últimas 10 mensagens
+                    msgs_para_api.append({"role": m["role"], "content": m["content"]})
+                
+                # Chama a nova função get_ai_response
+                resposta = get_ai_response(msgs_para_api)
+                
                 st.session_state.chat.append({"role": "assistant", "content": resposta})
+                
                 if "input_pergunta" in st.session_state:
                     st.session_state.input_pergunta = ""
-                st.experimental_rerun()
+                st.rerun()
 
     with col2:
         if st.button("✅ Finalizar Caso"):
             st.session_state.page = "avaliacao"
-            st.experimental_rerun()
+            st.rerun()
 
     if st.button("🔙 Voltar"):
         st.session_state.page = "inicio"
-        st.experimental_rerun()
+        st.rerun()
 
 # ---- Avaliação ----
 elif st.session_state.page == "avaliacao":
@@ -150,13 +185,16 @@ elif st.session_state.page == "avaliacao":
     st.success(f"Pontuação estimada: {nota}/10 (cobertura: {hits}/{total} tópicos)")
     
     st.subheader("Resumo das respostas do paciente:")
-    respostas = " ".join([m["content"] for m in st.session_state.chat if m["role"] == "assistant"])
+    respostas = " ".join([m["content"] for m in st.session_state.chat if m["role"] == "assistant" and not m['content'].startswith("[ERRO NA API]")])
     st.write(respostas if respostas else "Nenhuma resposta registrada.")
 
     st.subheader("Perguntas feitas pelo estudante:")
-    for m in st.session_state.chat:
-        if m["role"] == "user":
-            st.write(f"- {m['content']}")
+    perguntas_feitas = [m['content'] for m in st.session_state.chat if m["role"] == "user"]
+    if perguntas_feitas:
+        for p in perguntas_feitas:
+            st.write(f"- {p}")
+    else:
+        st.write("Nenhuma pergunta registrada.")
 
     st.info("Observação: pontuação gerada automaticamente apenas para fins de demonstração.")
     col1, col2 = st.columns(2)
@@ -164,9 +202,9 @@ elif st.session_state.page == "avaliacao":
         if st.button("🔁 Repetir caso"):
             st.session_state.page = "simulacao"
             st.session_state.chat = []
-            st.experimental_rerun()
+            st.rerun()
     with col2:
         if st.button("🏠 Voltar ao início"):
             st.session_state.page = "inicio"
             st.session_state.chat = []
-            st.experimental_rerun()
+            st.rerun()
