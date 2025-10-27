@@ -74,9 +74,9 @@ def get_ai_response(messages_history):
 
         # Inicializa o modelo com o prompt do sistema
         model = genai.GenerativeModel(
-            # === CORREÇÃO ESTÁ AQUI (Plano B) ===
-            model_name="gemini-1.0-pro", # <<< MUDANÇA: Usando nome de modelo mais antigo
-            # ==================================
+            # === CORREÇÃO FINAL ===
+            model_name="gemini-pro", # <<< MUDANÇA: O nome correto para a biblioteca nova
+            # ======================
             system_instruction=system_prompt_text
         )
 
@@ -106,7 +106,7 @@ def evaluate_conversation(chat):
         "tempo": ["quanto", "tempo", "dias"],
         "urina": ["urina", "odor", "cor", "sangue"],
         "febre": ["febre", "calafrio"],
-        "associado": ["náu-sea", "enjoo", "vômito"]
+        "associado": ["náusea", "enjoo", "vômito"]
     }
     hits = sum(1 for k in keywords.values() if any(w in user_text for w in k))
     nota = round((hits / len(keywords)) * 10, 1)
