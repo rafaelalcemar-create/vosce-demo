@@ -1,202 +1,168 @@
 # streamlit_app.py
 import os
 import streamlit as st
+from openai import OpenAI
 from datetime import datetime
-import openai
 
-# ---- Configuração da página ----
-st.set_page_config(page_title="VOSCE - Simulação Clínica com IA", page_icon="🩺", layout="centered")
+# ---- Configurações da página ----
+st.set_page_config(page_title="VOSCE - Simulação Clínica Virtual", page_icon="🩺", layout="centered")
 
-# ---- Carregar chave da OpenAI (via Streamlit secrets) ----
+# ---- Configuração da API ----
 OPENAI_KEY = None
-# Try Streamlit secrets first (deployed)
 try:
     OPENAI_KEY = st.secrets["OPENAI_API_KEY"]
 except Exception:
     OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-if OPENAI_KEY:
-    openai.api_key = OPENAI_KEY
+client = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 
-# ---- Estilo (balõezinhos simples) ----
-st.markdown(
-    """
-    <style>
-    .center { text-align:center }
-    .logo { width:140px; margin-bottom:10px; }
-    .chat-bubble-user { background:#0f1724; color:#fff; padding:10px 14px; border-radius:12px; margin:8px 0; text-align:right; }
-    .chat-bubble-patient { background:#0ea5a4; color:#fff; padding:10px 14px; border-radius:12px; margin:8px 0; text-align:left; }
-    .muted { color:#9aa0a6; font-size:0.95em; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# ---- Estilo visual ----
+st.markdown("""
+<style>
+body {background-color: #0d1117; color: #e6edf3;}
+h1,h2,h3,h4 {color: #00bcd4;}
+button, .stButton>button {background-color:#00bcd4; color:white; border-radius:8px; padding:0.6em 1.2em; font-weight:600;}
+.chat-bubble-user {background:#1e2a38; color:#fff; padding:10px 14px; border-radius:12px; margin:8px 0; text-align:right;}
+.chat-bubble-patient {background:#009688; color:#fff; padding:10px 14px; border-radius:12px; margin:8px 0; text-align:left;}
+.muted {color:#9aa0a6; font-size:0.95em;}
+footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
-# ---- Estado da sessão ----
+# ---- Sessão ----
 if "page" not in st.session_state:
     st.session_state.page = "inicio"
 if "chat" not in st.session_state:
-    st.session_state.chat = []            # lista de dicts: {"role": "user"/"patient", "content": "..."}
+    st.session_state.chat = []
 if "meta" not in st.session_state:
     st.session_state.meta = {"aluno": "", "caso": ""}
 
-# ---- Funções utilitárias ----
-def call_openai(messages, model="gpt-3.5-turbo"):
-    """Chama a API da OpenAI chat completions. Retorna texto ou mensagem de erro."""
-    if not OPENAI_KEY:
-        return None, "NO_API_KEY"
+# ---- Funções ----
+def get_ai_response(messages):
+    """Chama o modelo da OpenAI ou retorna resposta simulada se sem chave."""
+    if not client:
+        pergunta = messages[-1]["content"].lower()
+        if "dor" in pergunta:
+            return "Sinto uma queimação leve quando urino."
+        elif "tempo" in pergunta:
+            return "Isso começou há uns três dias."
+        elif "urina" in pergunta:
+            return "Notei que a urina está mais escura e com cheiro forte."
+        elif "febre" in pergunta:
+            return "Sim, tive febre leve ontem à noite."
+        else:
+            return "Não sei dizer, doutor."
     try:
-        resp = openai.ChatCompletion.create(
-            model=model,
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=messages,
             max_tokens=300,
             temperature=0.2,
         )
-        text = resp.choices[0].message.content.strip()
-        return text, None
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        return None, str(e)
+        return f"[ERRO NA API: {e}]"
 
-def build_system_prompt(case_short):
+def system_prompt(case_short):
     return (
-        "Você é um paciente real participando de uma simulação clínica para estudantes de medicina. "
-        "Responda de forma breve, natural e consistente com o caso. "
-        "Não entregue informações que não forem perguntadas — somente responda ao que o estudante solicitar. "
-        "Se não souber, diga 'Não sei' ou 'Não lembro'. Responda em português.\n"
-        f"Queixa visível ao estudante: {case_short}"
+        "Você é um paciente em uma simulação clínica com um estudante de medicina. "
+        "Responda de forma curta e natural, sem entregar diagnósticos. "
+        "Seja coerente com o caso e só revele detalhes quando perguntado. "
+        f"Queixa principal: {case_short}"
     )
 
-def evaluate_chat(chat):
-    """Heurística simples: conta cobertura de tópicos e gera nota."""
-    text_user = " ".join([m["content"].lower() for m in chat if m["role"] == "user"])
-    checks = {
+def evaluate_conversation(chat):
+    """Gera nota simples com base em tópicos abordados."""
+    user_text = " ".join([m["content"].lower() for m in chat if m["role"] == "user"])
+    keywords = {
         "dor": ["dor", "ardência", "queima"],
         "tempo": ["quanto", "tempo", "dias"],
-        "urina": ["cor", "odor", "urina", "sangue", "hematúria"],
+        "urina": ["urina", "odor", "cor", "sangue"],
         "febre": ["febre", "calafrio"],
-        "sintomas_gastro": ["náusea", "vômito", "enjoo"]
+        "associado": ["náusea", "enjoo", "vômito"]
     }
-    hits = 0
-    for kws in checks.values():
-        if any(k in text_user for k in kws):
-            hits += 1
-    nota = round(min(10, (hits / len(checks)) * 10), 1)
-    return nota, hits, len(checks)
+    hits = sum(1 for k in keywords.values() if any(w in user_text for w in k))
+    nota = round((hits / len(keywords)) * 10, 1)
+    return nota, hits, len(keywords)
 
-# ---- PÁGINA INICIAL ----
+# ---- Página inicial ----
 if st.session_state.page == "inicio":
-    st.markdown("<div class='center'>", unsafe_allow_html=True)
-    st.image("https://i.imgur.com/XC6fQpX.png", width=140)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.title("VOSCE — Simulação Clínica Virtual")
-    st.markdown("**Plataforma demonstrativa** para treinar anamnese clínica com um paciente virtual baseado em IA.")
-    st.markdown("<p class='muted'>Instruções: preencha seu nome (opcional), escolha o caso e clique em Iniciar Simulação. "
-                "Durante a simulação, faça perguntas ao paciente. Ao finalizar, você receberá um resumo e uma pontuação estimada.</p>", unsafe_allow_html=True)
-
-    st.session_state.meta["aluno"] = st.text_input("Nome do estudante (opcional):", value=st.session_state.meta.get("aluno",""))
-    caso = st.selectbox("Escolha o caso (apenas a queixa principal será exibida):", [
-        "ITU: ardência ao urinar",
-        "Cólica renal: dor lombar intensa em ondas",
-        "Hematúria: presença de sangue na urina",
-        "Disfunção miccional: jato fraco e esforço"
+    st.markdown("<h1 style='text-align:center;'>🩺 VOSCE — Simulação Clínica Virtual</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='muted' style='text-align:center;'>Treine anamnese com um paciente virtual baseado em IA.</p>", unsafe_allow_html=True)
+    
+    st.session_state.meta["aluno"] = st.text_input("Nome do estudante (opcional):", st.session_state.meta.get("aluno", ""))
+    caso = st.selectbox("Escolha o caso clínico:", [
+        "Infecção do Trato Urinário (ardência ao urinar)",
+        "Cólica renal (dor lombar intensa em ondas)",
+        "Hematúria (presença de sangue na urina)",
+        "Disfunção miccional (jato fraco e esforço)"
     ])
     st.session_state.meta["caso"] = caso
 
-    col1, col2 = st.columns([1,1])
-    with col1:
-        if st.button("🚀 Iniciar Simulação"):
-            # reset chat e ir para simulação
-            st.session_state.chat = []
-            st.session_state.page = "simulacao"
-            st.experimental_rerun()
-    with col2:
-        st.write("")  # espaço para alinhamento
+    if st.button("🚀 Iniciar Simulação"):
+        st.session_state.chat = []
+        st.session_state.page = "simulacao"
+        st.experimental_rerun()
 
-# ---- PÁGINA DE SIMULAÇÃO ----
+# ---- Simulação ----
 elif st.session_state.page == "simulacao":
     st.header("Atendimento Simulado — Converse com o paciente")
-    st.markdown(f"<small class='muted'>Queixa visível: {st.session_state.meta.get('caso','')}</small>", unsafe_allow_html=True)
+    st.markdown(f"<p class='muted'>Queixa principal: {st.session_state.meta['caso']}</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # mostrar histórico do chat
-    for m in st.session_state.chat:
-        if m["role"] == "user":
-            st.markdown(f"<div class='chat-bubble-user'><strong>Você:</strong><br>{m['content']}</div>", unsafe_allow_html=True)
+    # Histórico
+    for msg in st.session_state.chat:
+        if msg["role"] == "user":
+            st.markdown(f"<div class='chat-bubble-user'><b>Você:</b><br>{msg['content']}</div>", unsafe_allow_html=True)
         else:
-            st.markdown(f"<div class='chat-bubble-patient'><strong>Paciente:</strong><br>{m['content']}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='chat-bubble-patient'><b>Paciente:</b><br>{msg['content']}</div>", unsafe_allow_html=True)
 
-    # entrada do estudante
     pergunta = st.text_input("Digite sua pergunta para o paciente:", key="input_pergunta")
 
-    cols = st.columns([1,1])
-    with cols[0]:
+    col1, col2 = st.columns([1, 1])
+    with col1:
         if st.button("Enviar pergunta"):
-            if pergunta and pergunta.strip():
-                # adicionar mensagem do estudante
-                st.session_state.chat.append({"role":"user","content": pergunta})
-                # preparar prompt para IA
-                system_prompt = build_system_prompt(st.session_state.meta.get("caso",""))
-                messages = [{"role":"system", "content": system_prompt}]
-                # enviar histórico reduzido
-                for m in st.session_state.chat[-12:]:
-                    if m["role"] == "user":
-                        messages.append({"role":"user","content": m["content"]})
-                    else:
-                        messages.append({"role":"assistant","content": m["content"]})
-                # chamada OpenAI
-                reply_text, err = call_openai(messages)
-                if err == "NO_API_KEY":
-                    # fallback simples sem API
-                    p = pergunta.lower()
-                    if "dor" in p: reply_text = "É uma queimação no fim da micção."
-                    elif "quanto" in p or "tempo" in p: reply_text = "Começou há uns três dias."
-                    elif "cor" in p or "urina" in p or "odor" in p: reply_text = "A urina está mais escura e com odor forte."
-                    elif "febre" in p: reply_text = "Tive febre baixa ontem."
-                    else: reply_text = "Não sei."
-                elif err:
-                    reply_text = f"[ERRO NA API: {err}]"
-                # adicionar resposta do paciente
-                st.session_state.chat.append({"role":"patient","content": reply_text})
-                # limpar input (Streamlit não limpa automaticamente)
-if "input_pergunta" in st.session_state:
-    st.session_state.input_pergunta = ""
+            if pergunta.strip():
+                st.session_state.chat.append({"role": "user", "content": pergunta})
+                prompt = system_prompt(st.session_state.meta["caso"])
+                msgs = [{"role": "system", "content": prompt}]
+                for m in st.session_state.chat[-10:]:
+                    msgs.append({"role": m["role"], "content": m["content"]})
+                resposta = get_ai_response(msgs)
+                st.session_state.chat.append({"role": "assistant", "content": resposta})
+                if "input_pergunta" in st.session_state:
+                    st.session_state.input_pergunta = ""
                 st.experimental_rerun()
 
-    with cols[1]:
-        if st.button("✅ Finalizar caso / Avaliar"):
+    with col2:
+        if st.button("✅ Finalizar Caso"):
             st.session_state.page = "avaliacao"
             st.experimental_rerun()
 
-    st.markdown("---")
-    if st.button("🔙 Voltar ao início"):
+    if st.button("🔙 Voltar"):
         st.session_state.page = "inicio"
-        st.session_state.chat = []
         st.experimental_rerun()
 
-# ---- PÁGINA DE AVALIAÇÃO ----
+# ---- Avaliação ----
 elif st.session_state.page == "avaliacao":
-    st.header("Relatório e Avaliação")
-    nota, hits, total = evaluate_chat(st.session_state.chat)
-    st.success(f"Pontuação estimada: {nota:.1f}/10  (cobertura: {hits}/{total})")
-    st.markdown("### Resumo do caso com base nas respostas do paciente:")
-    patient_text = " ".join([m["content"] for m in st.session_state.chat if m["role"]=="patient"])
-    if patient_text:
-        st.write(patient_text)
-    else:
-        st.write("Nenhuma resposta registrada.")
+    st.header("Relatório da Simulação")
+    nota, hits, total = evaluate_conversation(st.session_state.chat)
+    st.success(f"Pontuação estimada: {nota}/10 (cobertura: {hits}/{total} tópicos)")
+    
+    st.subheader("Resumo das respostas do paciente:")
+    respostas = " ".join([m["content"] for m in st.session_state.chat if m["role"] == "assistant"])
+    st.write(respostas if respostas else "Nenhuma resposta registrada.")
 
-    st.markdown("### Perguntas feitas pelo estudante:")
+    st.subheader("Perguntas feitas pelo estudante:")
     for m in st.session_state.chat:
         if m["role"] == "user":
             st.write(f"- {m['content']}")
 
-    st.markdown("---")
-    st.info("Observação: essa avaliação é heurística e serve apenas para demonstração do protótipo VOSCE.")
-    col1, col2 = st.columns([1,1])
+    st.info("Observação: pontuação gerada automaticamente apenas para fins de demonstração.")
+    col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔁 Reiniciar simulação"):
-            st.session_state.page = "inicio"
+        if st.button("🔁 Repetir caso"):
+            st.session_state.page = "simulacao"
             st.session_state.chat = []
             st.experimental_rerun()
     with col2:
