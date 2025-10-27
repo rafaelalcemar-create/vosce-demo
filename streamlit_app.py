@@ -159,7 +159,7 @@ elif st.session_state.page == "simulacao":
                 # adicionar resposta do paciente
                 st.session_state.chat.append({"role":"patient","content": reply_text})
                 # limpar input (Streamlit não limpa automaticamente)
-                if "input_pergunta" in st.session_state:
+if "input_pergunta" in st.session_state:
     st.session_state.input_pergunta = ""
                 st.experimental_rerun()
 
