@@ -1,14 +1,14 @@
 # streamlit_app.py
 import os
 import streamlit as st
-import google.generativeai as genai  # <<< MUDANÇA: Importa a biblioteca do Google
+import google.generativeai as genai  # Importa a biblioteca do Google
 from datetime import datetime
 
 # ---- Configurações da página ----
 st.set_page_config(page_title="VOSCE - Simulação Clínica Virtual", page_icon="🩺", layout="centered")
 
 # ---- Configuração da API ----
-# <<< MUDANÇA: Configura a API do Google (Gemini)
+# Configura a API do Google (Gemini)
 GOOGLE_API_KEY = None
 try:
     # Carrega a chave do Streamlit Secrets
@@ -43,7 +43,7 @@ if "meta" not in st.session_state:
 
 # ---- Funções ----
 
-# <<< MUDANÇA: Função de API reescrita para o Gemini
+# Função de API reescrita para o Gemini
 def get_ai_response(messages_history):
     """Chama o modelo do Gemini ou retorna resposta simulada se sem chave."""
     if not GOOGLE_API_KEY:
@@ -74,7 +74,9 @@ def get_ai_response(messages_history):
 
         # Inicializa o modelo com o prompt do sistema
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash-latest", # 'Flash' é mais rápido e barato
+            # === CORREÇÃO ESTÁ AQUI ===
+            model_name="gemini-pro", # <<< MUDANÇA: Usando um modelo mais estável
+            # ==========================
             system_instruction=system_prompt_text
         )
 
@@ -127,7 +129,7 @@ if st.session_state.page == "inicio":
     if st.button("🚀 Iniciar Simulação"):
         st.session_state.chat = []
         st.session_state.page = "simulacao"
-        st.rerun() # Já está corrigido da nossa conversa anterior
+        st.rerun() 
 
 # ---- Simulação ----
 elif st.session_state.page == "simulacao":
@@ -151,7 +153,7 @@ elif st.session_state.page == "simulacao":
             if pergunta.strip():
                 st.session_state.chat.append({"role": "user", "content": pergunta})
                 
-                # <<< MUDANÇA: Lógica de chamada de API simplificada
+                # Lógica de chamada de API simplificada
                 # Prepara a lista de mensagens para o Gemini
                 prompt = system_prompt(st.session_state.meta["caso"])
                 msgs_para_api = [{"role": "system", "content": prompt}]
